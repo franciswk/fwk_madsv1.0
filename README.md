@@ -5,6 +5,29 @@ genotyped clones. It compares Elastic Net, Ridge, and a neural network baseline.
 Phenotypes are partially synthetic, and genotypes are simulated; results do not
 establish real-world predictive accuracy.
 
+## Project files
+
+- **Dependencies:** [requirements.txt](requirements.txt).
+- **Required sweetpotato inputs:** `data/raw/raw_phenotypes.csv` and
+  `data/raw/raw_genotypes.csv`.
+- **Notebooks:**
+  - [notebooks/02_genomic_prediction_analysis.ipynb](notebooks/02_genomic_prediction_analysis.ipynb)
+    runs the sweetpotato analysis.
+  - [notebooks/01_prepare_external_benchmarks.ipynb](notebooks/01_prepare_external_benchmarks.ipynb)
+    prepares external benchmark data.
+  - [notebooks/02_external_data_validation.ipynb](notebooks/02_external_data_validation.ipynb)
+    runs external validation.
+- **Python scripts:**
+  - [src/etl_pipeline.py](src/etl_pipeline.py) cleans the sweetpotato inputs.
+  - [src/scoring_pipeline.py](src/scoring_pipeline.py) calculates breeding indices.
+  - [src/capstone_pipeline.py](src/capstone_pipeline.py) trains and evaluates models.
+  - [src/external_validation/prepare_ag2p_benchmark.py](src/external_validation/prepare_ag2p_benchmark.py)
+    converts an external benchmark dataset.
+- **Optional external benchmark inputs:** for external validation, provide
+  `curated_geno_pheno.rdata` for each crop under
+  `data/benchmarks/learnable/raw/<crop>/`, using `commonbean`, `durum_wheat`,
+  `maize`, `rice210`, and `soybean` as the crop names.
+
 ## Getting started
 
 From the project root in PowerShell:
@@ -74,3 +97,15 @@ Download and extract each dataset's `curated_geno_pheno.rdata` into
 followed by [the validation notebook](notebooks/02_external_data_validation.ipynb).
 Benchmark results are written under `outputs/benchmarks/learnable/` and do not
 establish predictive accuracy for sweetpotato.
+
+## Repository and licensing
+
+The project's source code, notebooks, and user guide are available in the
+[fwk_madsv1.0 GitHub repository](https://github.com/franciswk/fwk_madsv1.0)
+[34]. Clone or download the repository and follow its README for setup and
+analysis instructions; dependencies are listed in
+[requirements.txt](requirements.txt). The README describes the main workflow
+and generated output locations. The source code is licensed under the
+[MIT License](LICENSE). Original project documentation and figures, distributed
+separately from the source code, are licensed under
+[Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/).
