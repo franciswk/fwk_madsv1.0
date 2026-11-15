@@ -92,10 +92,11 @@ Existing extracted files may prompt for replacement. Keep any existing data you
 want to preserve before downloading again.
 
 To prepare the CSVs, install the project requirements (including `pyreadr`) and
-run the following from the same folder:
+run [the preparation notebook](notebooks/01_prepare_external_benchmarks.ipynb)
+from top to bottom. Alternatively, run the following from the project root:
 
 ```powershell
-python -m pip install -r docs\requirements.txt
+python -m pip install -r requirements.txt
 foreach ($crop in @("commonbean", "durum_wheat", "maize", "rice210", "soybean")) {
     $source = ".\data\benchmarks\learnable\raw\$crop\curated_geno_pheno.rdata"
     python src\external_validation\prepare_ag2p_benchmark.py $source $crop
@@ -105,7 +106,7 @@ foreach ($crop in @("commonbean", "durum_wheat", "maize", "rice210", "soybean"))
 
 Preparation overwrites the corresponding genotype and phenotype CSVs in
 `data/benchmarks/learnable/processed/`. Then run
-[the external-validation notebook](../notebooks/02_external_data_validation.ipynb)
+[the external-validation notebook](notebooks/02_external_data_validation.ipynb)
 from top to bottom. Its within-crop results benchmark the workflow; they do not
 establish predictive accuracy for sweetpotato.
 
