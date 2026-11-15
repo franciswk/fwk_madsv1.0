@@ -1,0 +1,7 @@
+dataset,target,model_family,n_samples,n_markers,cv_folds,cv_r2,cv_mae,cv_rmse,overfitting_risk
+soybean,pheno1,elastic_net,346,31260,5,0.09929109016018056,0.20918930475518133,0.25856652055394713,low
+soybean,pheno1,ridge,346,31260,5,0.18253585323701405,0.19919754979629503,0.24632836196946617,controlled_by_ridge_shrinkage
+soybean,pheno1,mlp_baseline,346,31260,5,-0.015468225129798174,0.2181948819918139,0.2745448055381263,controlled_by_dimension_reduction_and_regularization
+soybean,pheno2,elastic_net,346,31260,5,0.16143382359202707,4.527365611418032,5.911048941918429,low
+soybean,pheno2,ridge,346,31260,5,0.24647807253089538,4.178287425128149,5.603299443531387,controlled_by_ridge_shrinkage
+soybean,pheno2,mlp_baseline,346,31260,5,-0.004611935388202371,4.822250664459045,6.4698625063895285,controlled_by_dimension_reduction_and_regularization

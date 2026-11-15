@@ -1,0 +1,13 @@
+dataset,target,model_family,n_samples,n_markers,cv_folds,cv_r2,cv_mae,cv_rmse,overfitting_risk
+commonbean,pheno,elastic_net,471,5820,5,0.34068532222609893,187.24088558354254,240.7804081161194,low
+commonbean,pheno,ridge,471,5820,5,0.4473987056936375,170.49528975394645,220.43508700872124,controlled_by_ridge_shrinkage
+commonbean,pheno,mlp_baseline,471,5820,5,0.2840874679326345,191.5203224678234,250.90236590568756,controlled_by_dimension_reduction_and_regularization
+commonbean,pheno1,elastic_net,471,5820,5,0.3573546373796602,42.83629951610116,54.73654937927407,low
+commonbean,pheno1,ridge,471,5820,5,0.4455265470565257,39.89748049928162,50.843109748746016,controlled_by_ridge_shrinkage
+commonbean,pheno1,mlp_baseline,471,5820,5,0.29221859148929263,43.81961371689102,57.44355407064687,controlled_by_dimension_reduction_and_regularization
+commonbean,pheno2,elastic_net,471,5820,5,0.1979968442483181,2.912012717974314,3.904658818769986,low
+commonbean,pheno2,ridge,471,5820,5,0.3153868714166085,2.6660202686541656,3.6075940760335206,controlled_by_ridge_shrinkage
+commonbean,pheno2,mlp_baseline,471,5820,5,0.04493095645820766,3.1247204668966044,4.261008865585421,controlled_by_dimension_reduction_and_regularization
+commonbean,pheno3,elastic_net,471,5820,5,0.22634961006916898,0.9855544453881352,1.43697128637727,low
+commonbean,pheno3,ridge,471,5820,5,0.395040099397174,0.8609455838517924,1.270688238415972,controlled_by_ridge_shrinkage
+commonbean,pheno3,mlp_baseline,471,5820,5,0.14746071024861906,1.0282278947158119,1.5084569390510167,controlled_by_dimension_reduction_and_regularization

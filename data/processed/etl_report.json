@@ -1,0 +1,19 @@
+{
+  "phenotype": {
+    "rows_in": 69,
+    "exact_duplicate_rows_dropped": 0,
+    "duplicate_clone_id_rows_resolved": 15,
+    "rows_dropped_missing_target": 0,
+    "final_row_count": 54
+  },
+  "genotype": {
+    "rows_in": 10005,
+    "malformed_marker_cells_coerced_to_nan": 0,
+    "exact_duplicate_rows_dropped": 5,
+    "duplicate_clone_id_rows_merged": 0,
+    "missing_marker_calls": 15134,
+    "final_row_count": 10000,
+    "marker_count": 500
+  },
+  "overlapping_clone_ids_after_join": 54
+}
