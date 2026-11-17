@@ -182,3 +182,8 @@ cython_debug/
 
 # External validation datasets
 /data/benchmarks/
+
+#Capstone project specific files
+/docs/
+/tests/
+

@@ -27,7 +27,7 @@ from sklearn.pipeline import Pipeline
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 
-# Primary target kept for backward-compatible schema validation.
+# Primary target used when no explicit validation target is supplied.
 TARGET_COLUMN = "market_index"
 
 # Computed indices to predict independently. Measured traits remain inputs to
@@ -87,9 +87,16 @@ def load_inputs(
     return pd.read_csv(phenotype_path), pd.read_csv(genotype_path)
 
 # Validate the inputs and return an alignment summary.
-def validate_inputs(phenotype: pd.DataFrame, genotype: pd.DataFrame) -> pd.DataFrame:
-    """Validate model inputs and return their alignment summary."""
-    phenotype_required = {"clone_id", TARGET_COLUMN}
+def validate_inputs(
+    phenotype: pd.DataFrame,
+    genotype: pd.DataFrame,
+    targets: list[str] | None = None,
+) -> pd.DataFrame:
+    """Validate the requested targets and return their alignment summary."""
+    target_columns = targets if targets is not None else [TARGET_COLUMN]
+    if not target_columns:
+        raise ValueError("Input validation failed: at least one target is required.")
+    phenotype_required = {"clone_id", *target_columns}
     missing_phenotype_columns = sorted(phenotype_required - set(phenotype.columns))
     missing_genotype_columns = sorted({"clone_id"} - set(genotype.columns))
     schema_errors = [
@@ -114,14 +121,18 @@ def validate_inputs(phenotype: pd.DataFrame, genotype: pd.DataFrame) -> pd.DataF
     checks = [
         (phenotype.empty, "Phenotype input is empty."),
         (genotype.empty, "Genotype input is empty."),
-        (phenotype["clone_id"].isna().any(), "Phenotype input contains missing clone_id values."),
-        (genotype["clone_id"].isna().any(), "Genotype input contains missing clone_id values."),
+        (
+            phenotype["clone_id"].isna().any()
+            or phenotype["clone_id"].astype("string").str.strip().eq("").any(),
+            "Phenotype input contains missing or blank clone_id values.",
+        ),
+        (
+            genotype["clone_id"].isna().any()
+            or genotype["clone_id"].astype("string").str.strip().eq("").any(),
+            "Genotype input contains missing or blank clone_id values.",
+        ),
         (phenotype["clone_id"].duplicated().any(), "Phenotype input contains duplicate clone_id values."),
         (genotype["clone_id"].duplicated().any(), "Genotype input contains duplicate clone_id values."),
-        (
-            not pd.api.types.is_numeric_dtype(phenotype[TARGET_COLUMN]), # pd.api.types recognizes any variant of integer or floating-point data types.
-            f"Phenotype column {TARGET_COLUMN!r} must be numeric.",
-        ),
         (genotype_markers.empty, "Genotype input must contain at least one marker column."),
         (
             not genotype_markers.empty
@@ -136,14 +147,19 @@ def validate_inputs(phenotype: pd.DataFrame, genotype: pd.DataFrame) -> pd.DataF
         ),
         (not common_ids, "No overlapping clone_id values were found between inputs."),
     ]
+    for target in target_columns:
+        if not pd.api.types.is_numeric_dtype(phenotype[target]):
+            checks.append((True, f"Phenotype column {target!r} must be numeric."))
+        elif np.isinf(phenotype[target].dropna().to_numpy(dtype=float)).any():
+            checks.append((True, f"Phenotype column {target!r} cannot contain infinite values."))
     # Collect all failed checks and raise a single error if any are found.
     errors = [message for failed, message in checks if failed]
     if errors:
         raise ValueError("Input validation failed:\n- " + "\n- ".join(errors))
     # Count the number of samples with observed target values among the overlapping clones.
     observed_target_count = phenotype.loc[
-        phenotype["clone_id"].isin(common_ids), TARGET_COLUMN
-    ].notna().sum()
+        phenotype["clone_id"].isin(common_ids), target_columns
+    ].notna().all(axis=1).sum()
     # Return a summary DataFrame with key metrics about the inputs.
     return pd.DataFrame(
         {
@@ -169,7 +185,9 @@ def _choose_marker_count(n_samples: int, n_features: int) -> int:
     """Pick a marker count that keeps at least MIN_SAMPLES_PER_MARKER samples per feature."""
     # Also cap by the configured maximum and by the markers actually available.
     ratio_capped = max(1, n_samples // MIN_SAMPLES_PER_MARKER)
-    return max(2, min(MAX_SELECTED_MARKERS, n_features, ratio_capped))
+    if n_features < 1:
+        raise ValueError("At least one marker column is required.")
+    return min(MAX_SELECTED_MARKERS, n_features, ratio_capped)
 
 # Build a machine learning pipeline for the specified model family.
 def _build_model_pipeline(
@@ -185,7 +203,7 @@ def _build_model_pipeline(
     if selected_model_family == "ridge":
         return Pipeline(
             steps=[
-                ("impute", SimpleImputer(strategy="median")),
+                ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
                 ("scale", StandardScaler()),
                 ("ridge", RidgeCV(alphas=np.logspace(-3, 5, 30))), # Fit a Ridge regression model with cross-validated alpha values
             ]
@@ -199,7 +217,7 @@ def _build_model_pipeline(
         n_markers = _choose_marker_count(n_samples, n_features)
         return Pipeline(
             steps=[
-                ("impute", SimpleImputer(strategy="median")), # Impute missing values with the median
+                ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
                 ("select", SelectKBest(score_func=f_regression, k=n_markers)), # Select the top k markers based on univariate regression tests
                 ("scale", StandardScaler()), # Standardize features by removing the mean and scaling to unit variance
                 (
@@ -207,7 +225,7 @@ def _build_model_pipeline(
                     ElasticNetCV( # Fit an Elastic Net model with cross-validated hyperparameters
                         l1_ratio=[0.1, 0.5, 0.9], # Mix of L1 and L2 regularization ratios to try
                         alphas=50, # Number of alpha values to try
-                        cv=3, # 3-fold cross-validation
+                        cv=KFold(n_splits=3, shuffle=True, random_state=seed),
                         tol=1e-3, # Tolerance for optimization
                         max_iter=10_000, # Maximum number of iterations
                         selection="random", # Random coordinate descent selection
@@ -230,10 +248,10 @@ def _build_model_pipeline(
     # layer, strong L2 (alpha), and 'lbfgs' - which converges far better than
     # 'adam'/'sgd' on small-n batches and needs no batch_size/early_stopping.
     n_markers = _choose_marker_count(n_samples, n_features) # Determine the number of markers to select based on the sample and feature count
-    n_components = min(8, max(2, n_samples // 2), n_markers) # Determine the number of PCA components to retain between 2 - 8
+    n_components = min(8, max(1, n_samples // 2), n_markers)
     return Pipeline(
         steps=[
-            ("impute", SimpleImputer(strategy="median")),
+            ("impute", SimpleImputer(strategy="median", keep_empty_features=True)),
             ("select", SelectKBest(score_func=f_regression, k=n_markers)), # Select the top k markers based on univariate regression tests
             ("scale", StandardScaler()), # Standardizes selected markers to zero mean (mu = 0) and unit variance (sigma = 1) within the training fold
             (
@@ -270,8 +288,14 @@ def _fit_and_evaluate_target(
     non_null_mask = labeled_target.notna() # Mask to identify non-missing target values
     x = labeled_features.loc[non_null_mask] # Features corresponding to non-missing target values
     y = labeled_target.loc[non_null_mask] # Non-missing target values
+    if not pd.api.types.is_numeric_dtype(y):
+        raise ValueError(f"Target {target_name!r} must be numeric.")
+    if np.isinf(y.to_numpy(dtype=float)).any():
+        raise ValueError(f"Target {target_name!r} cannot contain infinite values.")
     n_samples = len(y) # Number of labeled samples for this target
     n_features = x.shape[1] # Number of available markers/features
+    if n_features < 1:
+        raise ValueError("At least one marker column is required.")
     # Initialize the result dictionary with basic information about the target.
     result: dict = {
         "target": target_name,
@@ -298,9 +322,25 @@ def _fit_and_evaluate_target(
     n_folds = max(MIN_CV_FOLDS, min(MAX_CV_FOLDS, n_samples // 5)) # Determine the number of CV folds based on sample size, respecting min and max limits
     n_folds = min(n_folds, n_samples) # Ensure the number of folds does not exceed the number of samples
     selected_model_family = model_family or MODEL_FAMILY # Choose the model family, defaulting to the configured global option if not specified
-    n_selected_markers = n_features if selected_model_family == "ridge" else ( # Determine the number of selected markers based on the model family
-        _choose_marker_count(n_samples, n_features) # Use the helper function to choose the marker count for elastic_net model
-        if selected_model_family == "elastic_net"
+    # CV uses fold-safe dimensions; the independent final refit uses all labels.
+    min_train_fold_size = n_samples - math.ceil(n_samples / n_folds)
+    cv = KFold(n_splits=n_folds, shuffle=True, random_state=seed)
+    cv_model = _build_model_pipeline(
+        min_train_fold_size, n_features, selected_model_family, seed=seed
+    )
+    oof_predictions = cross_val_predict(cv_model, x, y, cv=cv)
+    model = _build_model_pipeline(
+        n_samples, n_features, selected_model_family, seed=seed
+    )
+    model.fit(x, y)
+    n_selected_markers = (
+        int(model.named_steps["select"].get_support().sum())
+        if "select" in model.named_steps
+        else n_features
+    )
+    n_cv_selected_markers = (
+        cv_model.named_steps["select"].k
+        if "select" in cv_model.named_steps
         else n_features
     )
     # Compute the number of samples per selected marker to assess overfitting risk.
@@ -315,17 +355,6 @@ def _fit_and_evaluate_target(
         overfitting_risk = "moderate"
     else:
         overfitting_risk = "low"
-    # Size PCA/marker-selection steps off the smallest CV training fold, not the
-    # full sample count, or a fit inside cross_val_predict can request more
-    # components than that fold actually has rows.
-    min_train_fold_size = n_samples - math.ceil(n_samples / n_folds) # Compute the size of the smallest CV training fold to properly size PCA/marker-selection steps
-    cv = KFold(n_splits=n_folds, shuffle=True, random_state=seed) # Initialize KFold cross-validation with the specified number of folds and random state
-    model = _build_model_pipeline(
-        min_train_fold_size, n_features, selected_model_family, seed=seed
-    ) # Build the model pipeline with the specified parameters
-    oof_predictions = cross_val_predict(model, x, y, cv=cv) # Generates out-of-fold (OOF) cross-validated predictions for every phenotyped sample in the labeled dataset
-    model.fit(x, y) # Refit the model on all labeled data for the final candidate-scoring model
-    
     # Update the result dictionary with model evaluation metrics and other relevant information.
     result.update(
         {
@@ -334,6 +363,15 @@ def _fit_and_evaluate_target(
             "skip_reason": None,
             "n_cv_folds": n_folds,
             "n_selected_markers": n_selected_markers,
+            "n_cv_selected_markers": n_cv_selected_markers,
+            "n_pca_components": (
+                int(model.named_steps["pca"].n_components_)
+                if "pca" in model.named_steps else None
+            ),
+            "n_cv_pca_components": (
+                cv_model.named_steps["pca"].n_components
+                if "pca" in cv_model.named_steps else None
+            ),
             "samples_per_selected_marker": samples_per_marker,
             "overfitting_risk": overfitting_risk,
             "cv_mae": float(mean_absolute_error(y, oof_predictions)),
@@ -356,10 +394,10 @@ def compare_model_families(
 ) -> pd.DataFrame:
     """Compare supported models with identical out-of-fold splits and metrics."""
     phenotype, genotype = load_inputs(phenotype_path, genotype_path) # Load phenotype and genotype data from the specified paths
-    validate_inputs(phenotype, genotype) # Validate the loaded phenotype and genotype data for consistency and correctness
     source_column = TARGET_SOURCE_COLUMNS.get(target, target) # Determine the source column for the target in the phenotype data
     if target not in TARGET_COLUMNS or source_column not in phenotype.columns:
         raise ValueError(f"Target {target!r} is not supported by the phenotype input.")
+    validate_inputs(phenotype, genotype, targets=[source_column])
     invalid_models = sorted(set(model_families) - set(MODEL_FAMILIES)) # Identify any model families that are not supported
     if invalid_models:
         raise ValueError(f"Unknown model families {invalid_models}; choose from {MODEL_FAMILIES}.")
@@ -382,6 +420,10 @@ def compare_model_families(
                 "seed": outcome.get("seed"),
                 "n_labeled_samples": outcome["n_labeled_samples"],
                 "n_markers": outcome["n_markers_available"],
+                "n_selected_markers": outcome.get("n_selected_markers"),
+                "n_cv_selected_markers": outcome.get("n_cv_selected_markers"),
+                "n_pca_components": outcome.get("n_pca_components"),
+                "n_cv_pca_components": outcome.get("n_cv_pca_components"),
                 "cv_folds": outcome.get("n_cv_folds"),
                 "cv_r2": outcome.get("cv_r2"),
                 "cv_rmse": outcome.get("cv_rmse"),
@@ -439,10 +481,10 @@ def top_candidates_by_model(
 ) -> pd.DataFrame:
     """Return the top unphenotyped candidates for one target, ranked separately by each model family."""
     phenotype, genotype = load_inputs(phenotype_path, genotype_path)
-    validate_inputs(phenotype, genotype)
     source_column = TARGET_SOURCE_COLUMNS.get(target, target)
     if target not in TARGET_COLUMNS or source_column not in phenotype.columns:
         raise ValueError(f"Target {target!r} is not supported by the phenotype input.")
+    validate_inputs(phenotype, genotype, targets=[source_column])
     invalid_models = sorted(set(model_families) - set(MODEL_FAMILIES))
     if invalid_models:
         raise ValueError(f"Unknown model families {invalid_models}; choose from {MODEL_FAMILIES}.")
@@ -489,7 +531,17 @@ def run_capstone_analysis(
 ) -> dict:
     """Train on labeled clones and predict each target trait for every genotyped clone."""
     phenotype, genotype = load_inputs(phenotype_path, genotype_path)
-    alignment = validate_inputs(phenotype, genotype)
+    target_columns = targets if targets is not None else [
+        target for target in TARGET_COLUMNS
+        if TARGET_SOURCE_COLUMNS[target] in phenotype.columns
+    ]
+    unsupported_targets = sorted(set(target_columns) - set(TARGET_COLUMNS))
+    if unsupported_targets:
+        raise ValueError(f"Unsupported targets: {', '.join(unsupported_targets)}")
+    alignment = validate_inputs(
+        phenotype, genotype,
+        targets=[TARGET_SOURCE_COLUMNS[target] for target in target_columns],
+    )
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -505,12 +557,6 @@ def run_capstone_analysis(
             f"need at least {MIN_SAMPLES_PER_TARGET} to fit any target model."
         )
     labeled_features = labeled_df[marker_columns]
-    # Determine which target traits are available for modeling based on the phenotype data
-    target_columns = targets if targets is not None else TARGET_COLUMNS
-    target_columns = [
-        t for t in target_columns
-        if t in TARGET_COLUMNS and TARGET_SOURCE_COLUMNS.get(t, t) in phenotype.columns # Only include targets with available phenotype data
-    ]
     # Initialize structures to store results and combined predictions
     target_results: dict[str, dict] = {}
     combined_predictions = pd.DataFrame(index=all_candidate_features.index)
@@ -630,13 +676,8 @@ def main(argv: list[str] | None = None) -> None:
             print(f"{target_name}: skipped ({outcome['skip_reason']})")
         else:
             print(f"{target_name}: cv_r2={outcome['cv_r2']:.3f}  cv_rmse={outcome['cv_rmse']:.4f}")
-    comparison = compare_model_families_across_targets(
-        args.phenotype,
-        args.genotype,
-        args.output_dir,
-    )
-    print(f"\nModel comparison completed for {comparison['target'].nunique()} targets.")
-    print(f"\nRanked clones and metrics written to: {args.output_dir}")
+    print(f"\nRanked clones written to: {args.output_dir}")
+    print("Use --compare to generate model-comparison metrics separately.")
 
 
 if __name__ == "__main__":

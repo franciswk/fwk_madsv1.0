@@ -40,8 +40,15 @@ python -m ipykernel install --user --name sweetpotato-capstone --display-name "P
 ```
 
 Open [the genomic prediction notebook](notebooks/02_genomic_prediction_analysis.ipynb),
-select **Python** kernel, and run all cells. The notebook cleans
-the raw data, trains and compares models, and displays interactive plots.
+select the **Python** kernel, and choose how much of the notebook to run.
+**Run All** executes the setup and ETL cells, primary-model evaluation and
+ranking, model-family comparisons, timing benchmark, and candidate-ranking
+cells. 
+To run only one analysis, first run the setup cells in order, then run
+the cell for that analysis (and the ETL cell first if the processed inputs need
+to be refreshed). 
+The model-comparison cell and candidate-ranking cell can be
+run independently after setup.
 
 The inputs are `data/raw/raw_phenotypes.csv` and `data/raw/raw_genotypes.csv`.
 Keep these raw files: the notebook does not regenerate them.
@@ -53,6 +60,8 @@ The notebook calls these scripts in sequence:
 1. **Clean the data:** [etl_pipeline.py](src/etl_pipeline.py) normalizes clone
    IDs, converts phenotype and SNP values to numeric form, and resolves
    duplicates. Missing SNP calls are retained for model-time imputation.
+   Missing or blank clone IDs are rejected. Phenotype duplicates keep the most
+   measured row, breaking ties by original row order
 2. **Calculate breeding indices:** [scoring_pipeline.py](src/scoring_pipeline.py),
    called by ETL, derives disease resistance (DRI), eating quality (EQI), and
    agronomic yield (AYI) scores from available traits. Market Index is their
@@ -63,13 +72,30 @@ The notebook calls these scripts in sequence:
    model for each index. Elastic Net is the primary model; Ridge and a small
    neural network provide comparisons. Shuffled cross-validation produces
    out-of-fold predictions and R², RMSE, and MAE scores. Imputation and other
-   preprocessing are fitted within each training fold.
+   preprocessing are fitted within each outer training fold. Elastic Net tunes
+   its penalties with seeded, shuffled three-fold splits of that preprocessed
+   training data; preprocessing is not independently refit within those inner
+   splits. Entirely missing marker columns are retained and imputed to zero.
 4. **Predict and rank:** The primary models are refit on the labeled clones and
    predict indices for all genotyped clones. The notebook also compares the
    top unphenotyped candidates across model families.
 
+With 54 labeled clones and five outer folds, Elastic Net and MLP select 14
+markers for CV and 18 for the final refit. MLP then reduces these to at most
+eight PCA components. Results distinguish `n_cv_selected_markers` from
+`n_selected_markers` (the fitted final selector count); the samples-per-marker
+diagnostic uses the final count. Ridge retains all markers.
+
 The notebook runs each model five times with the same random seed and
-cross-validation splits to measure runtime.
+cross-validation splits to measure runtime, not seed or fold-count sensitivity.
+
+To run the scripts without the notebook:
+
+```powershell
+python src\etl_pipeline.py
+python src\capstone_pipeline.py
+python src\capstone_pipeline.py --compare
+```
 
 ## Outputs
 
@@ -98,10 +124,17 @@ followed by [the validation notebook](notebooks/02_external_data_validation.ipyn
 Benchmark results are written under `outputs/benchmarks/learnable/` and do not
 establish predictive accuracy for sweetpotato.
 
+The benchmark preserves the sweetpotato pipeline caps: Elastic Net and MLP
+select at most 50 markers, MLP uses at most eight PCA components, and Ridge
+uses all available markers. Results compare these configured pipelines, not
+equally optimized model families. Per-trait `n_samples` counts only overlapping
+clones with an observed target; maize has 3,527 samples for traits 1–3 and
+3,526 for traits 4–6, rather than all 3,528 genotype rows.
+
 ## Repository and licensing
 
 The project's source code, notebooks, and user guide are available in the
-[fwk_madsv1.0 GitHub repository](https://github.com/franciswk/fwk_madsv1.0)
+[fwk_capstone_v1.0 GitHub repository](https://github.com/franciswk/fwk_capstone_v1.0)
 [34]. Clone or download the repository and follow its README for setup and
 analysis instructions; dependencies are listed in
 [requirements.txt](requirements.txt). The README describes the main workflow

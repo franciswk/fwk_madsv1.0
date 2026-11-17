@@ -82,10 +82,11 @@ STRING_PHENOTYPE_COLUMNS = [
 def normalize_clone_id(series: pd.Series) -> pd.Series:
     """Collapse whitespace/casing variants so join keys line up (e.g. ' bonita ' -> 'BONITA')."""
     return (
-        series.astype(str)
+        series.astype("string")
         .str.strip()
         .str.replace(r"\s+", " ", regex=True)
         .str.upper()
+        .replace("", pd.NA)
     )
 
 
@@ -117,6 +118,8 @@ def transform_phenotype(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
 
     df["clone_id"] = normalize_clone_id(df["clone_id"])
+    if df["clone_id"].isna().any():
+        raise ValueError("Phenotype input contains missing or blank clone_id values.")
 
     for column in STRING_PHENOTYPE_COLUMNS:
         df[column] = df[column].astype(str).str.strip().str.replace(r"\s+", " ", regex=True)
@@ -161,6 +164,8 @@ def transform_genotype(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     df = df.copy()
 
     df["clone_id"] = normalize_clone_id(df["clone_id"])
+    if df["clone_id"].isna().any():
+        raise ValueError("Genotype input contains missing or blank clone_id values.")
     marker_columns = [c for c in df.columns if c != "clone_id"]
 
     non_numeric_cells_before = 0
@@ -206,8 +211,9 @@ def run_etl(
     raw_genotype_path: str | Path = RAW_GENOTYPE_PATH,
     clean_phenotype_path: str | Path = CLEAN_PHENOTYPE_PATH,
     clean_genotype_path: str | Path = CLEAN_GENOTYPE_PATH,
+    etl_report_path: str | Path | None = None,
 ) -> dict:
-    """Run the full extract-transform-load flow and return a summary report."""
+    """Run ETL; default the report location to the clean phenotype directory."""
     raw_phenotype = extract_phenotype(raw_phenotype_path)
     raw_genotype = extract_genotype(raw_genotype_path)
 
@@ -223,8 +229,12 @@ def run_etl(
         "genotype": {"rows_in": len(raw_genotype), **genotype_report},
         "overlapping_clone_ids_after_join": len(common_ids),
     }
-    ETL_REPORT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    ETL_REPORT_PATH.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    report_path = (
+        Path(etl_report_path) if etl_report_path is not None
+        else Path(clean_phenotype_path).parent / "etl_report.json"
+    )
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return {
         "phenotype": clean_phenotype,

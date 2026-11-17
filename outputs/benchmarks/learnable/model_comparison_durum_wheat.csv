@@ -1,4 +1,4 @@
-dataset,target,model_family,n_samples,n_markers,cv_folds,cv_r2,cv_mae,cv_rmse,overfitting_risk
-durum_wheat,pheno,elastic_net,1006,44536,5,0.1343087566261878,3.0838383165492798,3.8928081124217875,low
-durum_wheat,pheno,ridge,1006,44536,5,0.26318992333739777,2.6464114780156334,3.5913626581822413,controlled_by_ridge_shrinkage
-durum_wheat,pheno,mlp_baseline,1006,44536,5,0.04407722811864023,3.1133530727560235,4.090655327836557,controlled_by_dimension_reduction_and_regularization
+dataset,target,model_family,n_samples,n_markers,n_selected_markers,n_cv_selected_markers,n_pca_components,n_cv_pca_components,cv_folds,cv_r2,cv_mae,cv_rmse,overfitting_risk
+durum_wheat,pheno,elastic_net,1006,44536,50,50,,,5,0.13078117943235656,3.090575693956081,3.9007313878661694,low
+durum_wheat,pheno,ridge,1006,44536,44536,44536,,,5,0.2631899233373981,2.646411478015633,3.5913626581822404,controlled_by_ridge_shrinkage
+durum_wheat,pheno,mlp_baseline,1006,44536,50,50,8.0,8.0,5,0.04407722811864023,3.1133530727560235,4.090655327836557,controlled_by_dimension_reduction_and_regularization
