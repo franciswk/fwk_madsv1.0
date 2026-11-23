@@ -187,3 +187,8 @@ cython_debug/
 /docs/
 /tests/
 
+
+# Data-generation notebook runs (large, regenerable)
+/data/generated/
+/data/raw/backup_*/
+/data/processed/

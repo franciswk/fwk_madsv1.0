@@ -4,5 +4,4 @@ plotly>=5.0
 scikit-learn>=1.7
 jupyterlab>=4.0
 ipykernel>=6.0
-h5py>=3.8
 pyreadr>=0.4

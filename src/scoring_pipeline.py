@@ -2,23 +2,20 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import numpy as np
 import pandas as pd
 
 
-# Columns averaged into the Disease Resistance Index (DRI). Each is expected to
-# already be on a 0-1 scale; non-numeric entries (e.g. text ratings) are skipped.
-RESISTANCE_COLUMNS = (
-    "fusarium_wilt_resistance",
-    "soil_rot_resistance",
-    "southern_rkn_resistance",
-    "fwilt_measured",
-    "ssr_measured",
-    "srkn_measured",
-    "grkn_measured",
-)
+# Sources for the Disease Resistance Index (DRI): one entry per disease, as
+# (measured column, literature fallback column). Each disease contributes one
+# score, so a disease with both sources is not counted twice. Values are
+# expected on a 0-1 scale; non-numeric entries (e.g. text ratings) are skipped.
+DISEASE_SOURCES = {
+    "fusarium_wilt": ("fwilt_measured", "fusarium_wilt_resistance"),
+    "soil_rot": ("ssr_measured", "soil_rot_resistance"),
+    "southern_rkn": ("srkn_measured", "southern_rkn_resistance"),
+    "guava_rkn": ("grkn_measured", None),
+}
 
 # Helper function to bound numeric values within a specified range and scale to 0-1.
 def _bounded(value: object, lower: float, upper: float) -> float | None:
@@ -75,16 +72,19 @@ def calculate_eqi(row: pd.Series) -> float:
 
 # Calculate the Disease Resistance Index (DRI) based on available resistance scores.
 def calculate_dri(row: pd.Series) -> float:
-    """Average available disease-resistance scores, all normalized to 0-1."""
-    # Collect only the resistance values that are present and numeric.
+    """Mean of one 0-1 resistance score per disease, preferring measured values."""
     scores = []
-    for column in RESISTANCE_COLUMNS:
-        score = _bounded(row.get(column), 0, 1)
+    for measured, literature in DISEASE_SOURCES.values():
+        # Use the measured score; fall back to the literature rating only when
+        # the measurement is missing.
+        score = _bounded(row.get(measured), 0, 1)
+        if score is None and literature is not None:
+            score = _bounded(row.get(literature), 0, 1)
         if score is not None:
             scores.append(score)
-    # Missing values are excluded rather than counted as 0; a row with no
-    # resistance data at all scores 0.
-    return float(np.mean(scores)) if scores else 0.0
+    # Diseases with no data are excluded rather than counted as 0; a row with
+    # no resistance data at all is NaN (unscorable), not the worst score.
+    return float(np.mean(scores)) if scores else np.nan
 
 # Calculate the Agronomic Yield Index (AYI) based on yield and maturity window.
 def calculate_ayi(row: pd.Series) -> float:
@@ -99,9 +99,9 @@ def calculate_ayi(row: pd.Series) -> float:
     maturity_score = None
     if maturity_min is not None and maturity_max is not None:
         maturity_score = float(np.mean([1 - maturity_min, 1 - maturity_max]))
-    # Average whichever components are available; 0 if neither is.
+    # Average whichever components are available; NaN (unscorable) if neither is.
     scores = [score for score in (yield_score, maturity_score) if score is not None]
-    return float(np.mean(scores)) if scores else 0.0
+    return float(np.mean(scores)) if scores else np.nan
 
 # Calculate the Parental Value Score (PVS) as a weighted combination of DRI, AYI, and EQI.
 def calculate_parental_value(row: pd.Series, dri: float, eqi: float, ayi: float) -> float:
@@ -119,19 +119,11 @@ def calculate_indices(df: pd.DataFrame) -> pd.DataFrame:
     scored["eqi"] = scored.apply(calculate_eqi, axis=1).round(6)
     scored["ayi"] = scored.apply(calculate_ayi, axis=1).round(6)
     # Composite indices are built from the already-rounded base indices:
-    # market_index is an unweighted mean; parental_value is weighted.
-    scored["market_index"] = scored[["dri", "eqi", "ayi"]].mean(axis=1).round(6)
+    # market_index is an unweighted mean; parental_value is weighted. Both are
+    # NaN when any base index is NaN, rather than averaging around the gap.
+    scored["market_index"] = scored[["dri", "eqi", "ayi"]].mean(axis=1, skipna=False).round(6)
     scored["parental_value"] = scored.apply(
         lambda row: round(calculate_parental_value(row, row["dri"], row["eqi"], row["ayi"]), 6),
         axis=1,
     )
-    return scored
-
-# Score a single CSV file by recalculating all indices and writing the output.
-def score_file(input_path: str | Path, output_path: str | Path) -> pd.DataFrame:
-    """Read a phenotype CSV, recalculate indices, and write the scored CSV."""
-    scored = calculate_indices(pd.read_csv(input_path))
-    # Create the output folder if needed, and write without the pandas index column.
-    Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-    scored.to_csv(output_path, index=False)
     return scored
