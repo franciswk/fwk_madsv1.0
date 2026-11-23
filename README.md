@@ -28,6 +28,8 @@ establish real-world predictive accuracy.
     prepares external benchmark data.
   - [notebooks/02_external_data_validation.ipynb](notebooks/02_external_data_validation.ipynb)
     runs external validation.
+- **Dashboard:** [app.py](app.py) is a Streamlit app that runs the pipeline and
+  shows the results (see [Dashboard](#dashboard)).
 - **Python scripts:**
   - [src/etl_pipeline.py](src/etl_pipeline.py) cleans the sweetpotato inputs.
   - [src/scoring_pipeline.py](src/scoring_pipeline.py) calculates breeding indices.
@@ -65,6 +67,24 @@ run independently after setup.
 
 The inputs are `data/raw/raw_phenotypes.csv` and `data/raw/raw_genotypes.csv`.
 Keep these raw files: the notebook does not regenerate them.
+
+## Dashboard
+
+From the project root, with the environment active:
+
+```powershell
+streamlit run app.py
+```
+
+- **Sidebar:** **Run analysis** runs the ETL, the model comparison and the rankings
+  (about 30 s); **Run sensitivity** runs 3 seeds × 3 fold counts (about 1 min).
+  Both overwrite `data/processed/` and the CSVs in `outputs/`, exactly as the
+  notebooks do.
+- **Tabs:** data and index distributions, model performance, top-N candidates
+  per index and model (downloadable), seed and fold sensitivity, and external
+  benchmarks.
+- With no results yet, click **Run analysis** first. External benchmarks come
+  from notebook 02_external_data_validation.
 
 ## How the pipeline works
 

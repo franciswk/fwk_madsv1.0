@@ -17,6 +17,7 @@ env/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.claude/
 
 # External AG2P-DISC datasets (download separately)
 /data/benchmarks/

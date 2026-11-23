@@ -5,3 +5,4 @@ scikit-learn>=1.7
 jupyterlab>=4.0
 ipykernel>=6.0
 pyreadr>=0.4
+streamlit>=1.50
