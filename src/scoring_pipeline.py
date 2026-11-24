@@ -6,80 +6,55 @@ import numpy as np
 import pandas as pd
 
 
-# Sources for the Disease Resistance Index (DRI): one entry per disease, as
-# (measured column, literature fallback column). Each disease contributes one
-# score, so a disease with both sources is not counted twice. Values are
-# expected on a 0-1 scale; non-numeric entries (e.g. text ratings) are skipped.
-DISEASE_SOURCES = {
-    "fusarium_wilt": ("fwilt_measured", "fusarium_wilt_resistance"),
-    "soil_rot": ("ssr_measured", "soil_rot_resistance"),
-    "southern_rkn": ("srkn_measured", "southern_rkn_resistance"),
-    "guava_rkn": ("grkn_measured", None),
+# Measured columns for the Disease Resistance Index (DRI), one per disease.
+# Values are expected on a 0-1 scale; missing or non-numeric entries are skipped.
+DISEASE_COLUMNS = {
+    "fusarium_wilt": "fwilt_measured",
+    "soil_rot": "ssr_measured",
+    "southern_rkn": "srkn_measured",
+    "guava_rkn": "grkn_measured",
 }
 
 # Helper function to bound numeric values within a specified range and scale to 0-1.
 def _bounded(value: object, lower: float, upper: float) -> float | None:
     # Missing or non-numeric values return None ("unavailable") rather than 0,
-    # so callers can fall back to another source or exclude them from averages.
+    # so callers can exclude them from averages.
     numeric = pd.to_numeric(value, errors="coerce")
     if pd.isna(numeric):
         return None
     # Min-max scale [lower, upper] to [0, 1], clipping out-of-range values.
     return float(np.clip((float(numeric) - lower) / (upper - lower), 0, 1))
 
-# Helper function to score free-text fields based on keyword matches.
-def _text_score(value: object, scores: dict[str, float], default: float = 0.5) -> float: # 0.5 is giving a neutral midpoint when no keywords match
-    # Case-insensitive substring match against a free-text field.
-    text = str(value).strip().lower()
-    # The first matching phrase wins, so list more specific phrases first
-    # (e.g. "deep orange" before "orange").
-    for phrase, score in scores.items():
-        if phrase in text:
-            return score
-    # Neutral midpoint when nothing matches (including missing values).
-    return default
-
 # Calculate the Eating Quality Index (EQI) based on sweetness, color, and moistness.
 def calculate_eqi(row: pd.Series) -> float:
-    """Equal-weight sweetness, deep flesh color, and moistness proxies."""
-    # Sweetness: prefer measured starch (3-18% scaled to 0-1); otherwise use
-    # keywords in the market category.
-    starch = _bounded(row.get("pct_starch_measured"), 3, 18) # 3, 18 reflect the typical biological and phenotypic range of starch content (expressed on a fresh weight basis) found across diverse sweetpotato breeding populations and germplasm collections.
-    sweetness = starch if starch is not None else _text_score( # should be replaced with sensory panel taste results if available
-        row.get("market_category"), {"sweet": 0.75, "sucrose": 0.75}
-    )
+    """Equal-weight mean of the measured sweetness, color, and moistness scores."""
+    # Sweetness: measured starch, 3-18% scaled to 0-1. 3 and 18 reflect the
+    # typical range of starch content (fresh weight basis) across diverse
+    # sweetpotato breeding populations and germplasm collections.
+    sweetness = _bounded(row.get("pct_starch_measured"), 3, 18)
 
-    # Color: prefer measured beta-carotene (0-0.6 scaled to 0-1); otherwise
-    # rank the described flesh color, with deeper orange scoring highest.
-    beta_carotene = _bounded(row.get("beta_carotene_measured"), 0, 0.6) # 0.6 Represents the high-end ceiling for beta-carotene concentration in elite orange-fleshed sweetpotato (OFSP) breeding lines and cultivars
-    color = beta_carotene if beta_carotene is not None else _text_score(
-        row.get("flesh_color"),
-        {"deep orange": 1.0, "orange": 0.75, "purple": 0.65, "yellow": 0.35, "white": 0.1},
-    )
+    # Color: measured beta-carotene, 0-0.6 scaled to 0-1. 0.6 is the high-end
+    # ceiling for elite orange-fleshed sweetpotato (OFSP) lines and cultivars.
+    color = _bounded(row.get("beta_carotene_measured"), 0, 0.6)
 
     # Moistness: a triangular score that peaks at 22% dry matter and drops
-    # linearly to 0 at 10% or 34%. Without dry-matter data, use market-category
-    # keywords instead.
+    # linearly to 0 at 10% or 34%.
     dry_matter = pd.to_numeric(row.get("pct_dm_measured"), errors="coerce")
     moistness = (
         float(np.clip(1 - abs(float(dry_matter) - 22) / 12, 0, 1))
         if pd.notna(dry_matter)
-        else _text_score(row.get("market_category"), {"moist": 0.85, "dry": 0.2})
+        else None
     )
-    # The three components are always present (via fallbacks), so EQI is
-    # their equal-weight mean.
-    return float(np.mean([sweetness, color, moistness]))
+    # Average whichever components are measured; NaN (unscorable) if none are.
+    scores = [score for score in (sweetness, color, moistness) if score is not None]
+    return float(np.mean(scores)) if scores else np.nan
 
 # Calculate the Disease Resistance Index (DRI) based on available resistance scores.
 def calculate_dri(row: pd.Series) -> float:
-    """Mean of one 0-1 resistance score per disease, preferring measured values."""
+    """Mean of the measured 0-1 resistance scores available for this row."""
     scores = []
-    for measured, literature in DISEASE_SOURCES.values():
-        # Use the measured score; fall back to the literature rating only when
-        # the measurement is missing.
-        score = _bounded(row.get(measured), 0, 1)
-        if score is None and literature is not None:
-            score = _bounded(row.get(literature), 0, 1)
+    for column in DISEASE_COLUMNS.values():
+        score = _bounded(row.get(column), 0, 1)
         if score is not None:
             scores.append(score)
     # Diseases with no data are excluded rather than counted as 0; a row with

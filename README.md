@@ -99,10 +99,11 @@ The notebook calls these scripts in sequence:
    called by ETL, derives disease resistance (DRI), eating quality (EQI), and
    agronomic yield (AYI) scores from available traits. Market Index is their
    equal-weight mean; Parental Value weights DRI and AYI at 40% each and EQI at
-   20%. DRI averages one score per disease, preferring the measured value over
-   the literature rating. A clone with no disease, or no yield and maturity,
-   data gets a missing index rather than 0 and is dropped by ETL. These are
-   proxy scores, with fallback rules for missing traits.
+   20%. Each base index averages only the measured components a clone has;
+   there are no fallbacks to literature ratings or text descriptors. A clone
+   with none of an index's measured components gets a missing index rather
+   than 0 and is dropped by ETL. These are proxy scores, not direct measures
+   of breeding value.
 3. **Train and evaluate:** [capstone_pipeline.py](src/capstone_pipeline.py)
    joins clones with both phenotype and genotype data and trains a separate
    model for each index. Elastic Net is the primary model; Ridge and a small
