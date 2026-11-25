@@ -1,4 +1,4 @@
-"""Streamlit dashboard: run the sweetpotato pipeline and explore its results.
+"""Streamlit dashboard: run the sweetpotato genomic prediction pipeline and explore its results.
 
 Run from the project root:
     streamlit run app.py
