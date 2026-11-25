@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from sklearn.compose import TransformedTargetRegressor
 from sklearn.feature_selection import SelectKBest, f_regression
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import ElasticNetCV, RidgeCV
@@ -247,6 +248,10 @@ def _build_model_pipeline(
     # sees it), cap components in the single digits, use a tiny single hidden
     # layer, strong L2 (alpha), and 'lbfgs' - which converges far better than
     # 'adam'/'sgd' on small-n batches and needs no batch_size/early_stopping.
+    # The target is standardized for fitting and predictions are mapped back to
+    # the original units. Without this, a fixed alpha acts very differently on
+    # traits whose scales differ by orders of magnitude, and lbfgs fails to
+    # converge on large-mean traits. The scaler is fitted on each training fold.
     n_markers = _choose_marker_count(n_samples, n_features) # Determine the number of markers to select based on the sample and feature count
     n_components = min(8, max(1, n_samples // 2), n_markers)
     return Pipeline(
@@ -264,13 +269,16 @@ def _build_model_pipeline(
             ),
             (
                 "mlp",
-                MLPRegressor(
-                    hidden_layer_sizes=(8,), # Single hidden layer with 8 neurons
-                    activation="relu", # ReLU activation function for non-linear transformations
-                    solver="lbfgs", # Use the L-BFGS optimizer for small datasets
-                    alpha=1.0, # L2 regularization strength
-                    max_iter=2000, # Maximum number of iterations for the optimizer
-                    random_state=seed,
+                TransformedTargetRegressor(
+                    regressor=MLPRegressor(
+                        hidden_layer_sizes=(8,), # Single hidden layer with 8 neurons
+                        activation="relu", # ReLU activation function for non-linear transformations
+                        solver="lbfgs", # Use the L-BFGS optimizer for small datasets
+                        alpha=1.0, # L2 regularization strength (on the standardized target)
+                        max_iter=2000, # Maximum number of iterations for the optimizer
+                        random_state=seed,
+                    ),
+                    transformer=StandardScaler(), # Standardize y within each training fold
                 ),
             ),
         ]
@@ -283,6 +291,7 @@ def _fit_and_evaluate_target(
     labeled_target: pd.Series,
     model_family: str | None = None,
     seed: int = DEFAULT_SEED,
+    n_cv_folds: int | None = None,
 ) -> dict:
     """Cross-validate and fit a single-target model, or report why it was skipped."""
     non_null_mask = labeled_target.notna() # Mask to identify non-missing target values
@@ -317,10 +326,17 @@ def _fit_and_evaluate_target(
         result["skip_reason"] = f"{target_name!r} has zero variance across labeled clones; nothing to predict."
         return result
 
-    # Use fewer folds for smaller labeled sets, while preserving at least the
-    # configured minimum for meaningful out-of-fold evaluation.
-    n_folds = max(MIN_CV_FOLDS, min(MAX_CV_FOLDS, n_samples // 5)) # Determine the number of CV folds based on sample size, respecting min and max limits
-    n_folds = min(n_folds, n_samples) # Ensure the number of folds does not exceed the number of samples
+    if n_cv_folds is None:
+        # Use fewer folds for smaller labeled sets, within configured limits.
+        n_folds = max(MIN_CV_FOLDS, min(MAX_CV_FOLDS, n_samples // 5))
+        n_folds = min(n_folds, n_samples)
+    else:
+        if not MIN_CV_FOLDS <= n_cv_folds <= n_samples:
+            raise ValueError(
+                f"n_cv_folds must be between {MIN_CV_FOLDS} and {n_samples}; "
+                f"got {n_cv_folds}."
+            )
+        n_folds = n_cv_folds
     selected_model_family = model_family or MODEL_FAMILY # Choose the model family, defaulting to the configured global option if not specified
     # CV uses fold-safe dimensions; the independent final refit uses all labels.
     min_train_fold_size = n_samples - math.ceil(n_samples / n_folds)
@@ -385,15 +401,19 @@ def _fit_and_evaluate_target(
     return result # Return the result dictionary containing model evaluation metrics and other relevant information
 
 # Compare different model families using identical out-of-fold splits and evaluation metrics.
-def compare_model_families(
-    phenotype_path: str | Path,
-    genotype_path: str | Path,
-    target: str = TARGET_COLUMN,
-    model_families: tuple[str, ...] = MODEL_FAMILIES,
-    seed: int = DEFAULT_SEED,
-) -> pd.DataFrame:
-    """Compare supported models with identical out-of-fold splits and metrics."""
-    phenotype, genotype = load_inputs(phenotype_path, genotype_path) # Load phenotype and genotype data from the specified paths
+def _compare_model_families_loaded(
+    phenotype: pd.DataFrame,
+    genotype: pd.DataFrame,
+    target: str,
+    model_families: tuple[str, ...],
+    seed: int,
+) -> tuple[pd.DataFrame, dict[tuple[str, str], dict]]:
+    """Compare model families on already-loaded inputs.
+
+    Returns the comparison table and the full outcome of every fit, keyed by
+    (target, model_family), so callers can reuse the fitted models and
+    out-of-fold predictions instead of refitting them.
+    """
     source_column = TARGET_SOURCE_COLUMNS.get(target, target) # Determine the source column for the target in the phenotype data
     if target not in TARGET_COLUMNS or source_column not in phenotype.columns:
         raise ValueError(f"Target {target!r} is not supported by the phenotype input.")
@@ -405,6 +425,7 @@ def compare_model_families(
     marker_columns = [column for column in genotype.columns if column != "clone_id"]
     labeled_df = phenotype.merge(genotype, on="clone_id", how="inner").set_index("clone_id")
     results = []
+    outcomes: dict[tuple[str, str], dict] = {}
     for model_family in model_families:
         outcome = _fit_and_evaluate_target(
             target,
@@ -413,6 +434,7 @@ def compare_model_families(
             model_family=model_family,
             seed=seed,
         )
+        outcomes[(target, model_family)] = outcome
         results.append(
             {
                 "model_family": model_family,
@@ -433,7 +455,7 @@ def compare_model_families(
         )
 
     comparison = pd.DataFrame(results).sort_values("cv_r2", ascending=False).reset_index(drop=True)
-    return comparison
+    return comparison, outcomes
 
 # Function to compare model families across multiple targets
 def compare_model_families_across_targets(
@@ -443,23 +465,34 @@ def compare_model_families_across_targets(
     targets: list[str] | None = None,
     model_families: tuple[str, ...] = MODEL_FAMILIES,
     seed: int = DEFAULT_SEED,
-) -> pd.DataFrame:
-    """Compare model families across targets and save one consolidated results file."""
+    return_outcomes: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, dict[tuple[str, str], dict]]:
+    """Compare model families across targets and save one consolidated results file.
+
+    With return_outcomes=True, also returns every fit's full outcome (fitted
+    model, out-of-fold predictions, metrics) keyed by (target, model_family).
+    Pass that dict as `outcomes=` to run_capstone_analysis and
+    top_candidates_by_model to reuse these fits instead of refitting.
+    """
+    # Load the inputs once and reuse them for every target.
+    phenotype, genotype = load_inputs(phenotype_path, genotype_path)
     target_columns = targets if targets is not None else TARGET_COLUMNS
     comparison_frames = []
+    all_outcomes: dict[tuple[str, str], dict] = {}
     for target in target_columns:
         try:
-            comparison_frames.append(
-                compare_model_families(
-                    phenotype_path,
-                    genotype_path,
-                    target=target,
-                    model_families=model_families,
-                    seed=seed,
-                )
+            comparison, outcomes = _compare_model_families_loaded(
+                phenotype,
+                genotype,
+                target=target,
+                model_families=model_families,
+                seed=seed,
             )
         except ValueError as exc:
             print(f"{target}: skipped ({exc})")
+            continue
+        comparison_frames.append(comparison)
+        all_outcomes.update(outcomes)
 
     if not comparison_frames:
         raise ValueError("No supported targets could be compared.")
@@ -468,7 +501,29 @@ def compare_model_families_across_targets(
     output_path = Path(output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     comparison.to_csv(output_path / "model_comparison_all_targets.csv", index=False) # Save the consolidated comparison results for all targets
+    if return_outcomes:
+        return comparison, all_outcomes
     return comparison
+
+
+def _reusable_outcome(
+    outcomes: dict[tuple[str, str], dict] | None,
+    target: str,
+    model_family: str,
+    seed: int,
+) -> dict | None:
+    """Return a copy of a stored outcome fitted with the same seed, or None.
+
+    Outcomes come from compare_model_families_across_targets(return_outcomes=True),
+    which uses the default CV fold count, so a reused fit matches a fresh one.
+    A shallow copy lets callers pop keys without altering the shared dict.
+    """
+    if not outcomes:
+        return None
+    outcome = outcomes.get((target, model_family))
+    if outcome is None or outcome.get("seed") != seed:
+        return None
+    return dict(outcome)
 
 # Function to get top candidates by model family
 def top_candidates_by_model(
@@ -478,8 +533,14 @@ def top_candidates_by_model(
     model_families: tuple[str, ...] = MODEL_FAMILIES,
     top_n: int = 5,
     seed: int = DEFAULT_SEED,
+    outcomes: dict[tuple[str, str], dict] | None = None,
 ) -> pd.DataFrame:
-    """Return the top unphenotyped candidates for one target, ranked separately by each model family."""
+    """Return the top unphenotyped candidates for one target, ranked separately by each model family.
+
+    Pass `outcomes` from compare_model_families_across_targets(return_outcomes=True)
+    to reuse those fitted models; any model not found there (or fitted with a
+    different seed) is fitted here as before.
+    """
     phenotype, genotype = load_inputs(phenotype_path, genotype_path)
     source_column = TARGET_SOURCE_COLUMNS.get(target, target)
     if target not in TARGET_COLUMNS or source_column not in phenotype.columns:
@@ -498,13 +559,15 @@ def top_candidates_by_model(
 
     frames = []
     for model_family in model_families:
-        outcome = _fit_and_evaluate_target(
-            target,
-            labeled_df[marker_columns],
-            labeled_df[source_column],
-            model_family=model_family,
-            seed=seed,
-        )
+        outcome = _reusable_outcome(outcomes, target, model_family, seed)
+        if outcome is None:
+            outcome = _fit_and_evaluate_target(
+                target,
+                labeled_df[marker_columns],
+                labeled_df[source_column],
+                model_family=model_family,
+                seed=seed,
+            )
         if outcome["skipped"]:
             raise ValueError(outcome["skip_reason"])
         predictions = pd.Series(outcome["_fitted_model"].predict(novel_features), index=novel_features.index)
@@ -528,8 +591,14 @@ def run_capstone_analysis(
     output_dir: str | Path,
     targets: list[str] | None = None,
     seed: int = DEFAULT_SEED,
+    outcomes: dict[tuple[str, str], dict] | None = None,
 ) -> dict:
-    """Train on labeled clones and predict each target trait for every genotyped clone."""
+    """Train on labeled clones and predict each target trait for every genotyped clone.
+
+    Pass `outcomes` from compare_model_families_across_targets(return_outcomes=True)
+    to reuse its primary-model (Elastic Net) fits; any target not found there
+    (or fitted with a different seed) is fitted here as before.
+    """
     phenotype, genotype = load_inputs(phenotype_path, genotype_path)
     target_columns = targets if targets is not None else [
         target for target in TARGET_COLUMNS
@@ -566,9 +635,11 @@ def run_capstone_analysis(
         source_column = TARGET_SOURCE_COLUMNS.get(target_name, target_name)
         if source_column not in labeled_df.columns: # Skip targets for which the source column is not available in the labeled data
             continue
-        outcome = _fit_and_evaluate_target(
-            target_name, labeled_features, labeled_df[source_column], seed=seed
-        )
+        outcome = _reusable_outcome(outcomes, target_name, MODEL_FAMILY, seed)
+        if outcome is None:
+            outcome = _fit_and_evaluate_target(
+                target_name, labeled_features, labeled_df[source_column], seed=seed
+            )
         if outcome["skipped"]:
             target_results[target_name] = outcome
             continue

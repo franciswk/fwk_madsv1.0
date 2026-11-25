@@ -8,19 +8,34 @@ establish real-world predictive accuracy.
 ## Project files
 
 - **Dependencies:** [requirements.txt](requirements.txt).
-- **Required sweetpotato inputs:** `data/raw/raw_phenotypes.csv` and
-  `data/raw/raw_genotypes.csv`.
+- **Required sweetpotato inputs:** `data/raw/raw_phenotypes.csv` (54 clones;
+  literature-based and synthetic records, curated by hand) and
+  `data/raw/raw_genotypes.csv` (simulated from the phenotypes; see
+  [Regenerating the genotypes](#regenerating-the-genotypes)).
+- **Simulated signal:** the genotype simulator shifts the allele frequencies of
+  25 random markers per index in proportion to each labeled clone's index
+  value. The 10,000 unlabeled candidates get no shift, so cross-validated
+  accuracy measures recovery of that planted signal, and candidate rankings
+  cannot be validated. The current `raw_genotypes.csv` embeds the revised indices.
 - **Notebooks:**
+  - [notebooks/00_generate_raw_data.ipynb](notebooks/00_generate_raw_data.ipynb)
+    simulates genotypes from the phenotype file (optional).
   - [notebooks/02_genomic_prediction_analysis.ipynb](notebooks/02_genomic_prediction_analysis.ipynb)
     runs the sweetpotato analysis.
+  - [notebooks/03_seed_fold_sensitivity.ipynb](notebooks/03_seed_fold_sensitivity.ipynb)
+    evaluates sensitivity to random seeds and outer cross-validation fold counts.
   - [notebooks/01_prepare_external_benchmarks.ipynb](notebooks/01_prepare_external_benchmarks.ipynb)
     prepares external benchmark data.
   - [notebooks/02_external_data_validation.ipynb](notebooks/02_external_data_validation.ipynb)
     runs external validation.
+- **Dashboard:** [app.py](app.py) is a Streamlit app that runs the pipeline and
+  shows the results (see [Dashboard](#dashboard)).
 - **Python scripts:**
   - [src/etl_pipeline.py](src/etl_pipeline.py) cleans the sweetpotato inputs.
   - [src/scoring_pipeline.py](src/scoring_pipeline.py) calculates breeding indices.
   - [src/capstone_pipeline.py](src/capstone_pipeline.py) trains and evaluates models.
+  - [src/data_generation/simulate_realistic_genotypes.py](src/data_generation/simulate_realistic_genotypes.py)
+    simulates the genotype file from the phenotypes.
   - [src/external_validation/prepare_ag2p_benchmark.py](src/external_validation/prepare_ag2p_benchmark.py)
     converts an external benchmark dataset.
 - **Optional external benchmark inputs:** for external validation, provide
@@ -53,6 +68,24 @@ run independently after setup.
 The inputs are `data/raw/raw_phenotypes.csv` and `data/raw/raw_genotypes.csv`.
 Keep these raw files: the notebook does not regenerate them.
 
+## Dashboard
+
+From the project root, with the environment active:
+
+```powershell
+streamlit run app.py
+```
+
+- **Sidebar:** **Run analysis** runs the ETL, the model comparison and the rankings
+  (about 30 s); **Run sensitivity** runs 3 seeds × 3 fold counts (about 1 min).
+  Both overwrite `data/processed/` and the CSVs in `outputs/`, exactly as the
+  notebooks do.
+- **Tabs:** data and index distributions, model performance, top-N candidates
+  per index and model (downloadable), seed and fold sensitivity, and external
+  benchmarks.
+- With no results yet, click **Run analysis** first. External benchmarks come
+  from notebook 02_external_data_validation.
+
 ## How the pipeline works
 
 The notebook calls these scripts in sequence:
@@ -66,7 +99,11 @@ The notebook calls these scripts in sequence:
    called by ETL, derives disease resistance (DRI), eating quality (EQI), and
    agronomic yield (AYI) scores from available traits. Market Index is their
    equal-weight mean; Parental Value weights DRI and AYI at 40% each and EQI at
-   20%. These are proxy scores, with fallback rules for missing traits.
+   20%. Each base index averages only the measured components a clone has;
+   there are no fallbacks to literature ratings or text descriptors. A clone
+   with none of an index's measured components gets a missing index rather
+   than 0 and is dropped by ETL. These are proxy scores, not direct measures
+   of breeding value.
 3. **Train and evaluate:** [capstone_pipeline.py](src/capstone_pipeline.py)
    joins clones with both phenotype and genotype data and trains a separate
    model for each index. Elastic Net is the primary model; Ridge and a small
@@ -82,7 +119,9 @@ The notebook calls these scripts in sequence:
 
 With 54 labeled clones and five outer folds, Elastic Net and MLP select 14
 markers for CV and 18 for the final refit. MLP then reduces these to at most
-eight PCA components. Results distinguish `n_cv_selected_markers` from
+eight PCA components, and fits on a standardized target (scaled within each
+training fold, with predictions mapped back to the original units) so its
+fixed L2 penalty behaves the same across traits of very different scales. Results distinguish `n_cv_selected_markers` from
 `n_selected_markers` (the fitted final selector count); the samples-per-marker
 diagnostic uses the final count. Ridge retains all markers.
 
@@ -97,9 +136,29 @@ python src\capstone_pipeline.py
 python src\capstone_pipeline.py --compare
 ```
 
+## Regenerating the genotypes
+
+Optional. Input: `data/raw/raw_phenotypes.csv` only.
+[src/data_generation/simulate_realistic_genotypes.py](src/data_generation/simulate_realistic_genotypes.py)
+scores it with the project ETL (current index formulas), generates 9,946 seeded
+candidate IDs, and simulates 500 SNPs (allele-frequency spectrum, six
+breeding-program subgroups, 10-marker LD blocks, planted signal, messiness).
+
+- **Notebook (recommended):** [notebooks/00_generate_raw_data.ipynb](notebooks/00_generate_raw_data.ipynb)
+  writes to `data/generated/<run>/` (git-ignored), checks the ETL join and
+  cross-validated R², and copies the file into `data/raw/` only if
+  `PROMOTE_GENOTYPES_TO_RAW = True`.
+- **Script:** `python -m src.data_generation.simulate_realistic_genotypes`
+  overwrites `data/raw/raw_genotypes.csv` after backing it up to
+  `data/raw/backup_<timestamp>/`.
+
+After replacing the genotypes, re-run the ETL and notebooks 02 and 03.
+
 ## Outputs
 
 - `data/processed/`: cleaned phenotype and genotype CSVs and `etl_report.json`.
+  Not tracked in git; created by the ETL step (notebook 02 or
+  `python src\etl_pipeline.py`).
 - `outputs/ranked_clones_multi_index.csv`: predictions, observed values, and
   cross-validated predictions for the modeled indices.
 - `outputs/model_comparison_all_targets.csv`: cross-validation results for the
